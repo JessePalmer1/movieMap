@@ -21,6 +21,7 @@
  */
 
 import { Matrix, Vector, dot, subtract } from "./linalg";
+import { MOOD_DIM } from "./moodAxes";
 
 export interface PairCandidate {
   movieId: number;
@@ -40,6 +41,17 @@ export interface SelectPairOptions {
   maxShowsPerMovie?: number;
   /** Random pairs to evaluate. Exhaustive search is unnecessary at this scale. */
   sampleSize?: number;
+  /**
+   * Midpoints of pairs the user rejected outright ("neither of these").
+   *
+   * Information gain alone would happily offer another pair from the same
+   * neighbourhood, since the model is still uncertain there. But the user has
+   * just said that whole region is wrong tonight, so refining inside it burns
+   * a round. Pairs near these centres are penalised.
+   */
+  avoidCenters?: Vector[];
+  /** Strength of that penalty, in the same units as the BALD score. */
+  avoidWeight?: number;
   /** Injectable for deterministic tests. */
   random?: () => number;
 }
@@ -53,6 +65,19 @@ export interface SelectedPair {
 
 const DEFAULT_SAMPLE_SIZE = 400;
 const DEFAULT_MAX_SHOWS = 2;
+
+/**
+ * BALD scores sit in [0, 1] bits, so this is a meaningful nudge that can still
+ * be overridden by a genuinely much more informative pair.
+ */
+const DEFAULT_AVOID_WEIGHT = 0.3;
+
+/**
+ * Width of the avoidance kernel. Mood vectors are z-scored, so two unrelated
+ * midpoints in 12 dimensions sit roughly sqrt(12/2) apart; at that distance the
+ * penalty has essentially vanished.
+ */
+const AVOID_SCALE = Math.sqrt(MOOD_DIM / 2);
 
 /** sqrt(pi * ln2 / 2), the constant in the BALD logistic approximation. */
 const BALD_C = Math.sqrt((Math.PI * Math.LN2) / 2);
@@ -110,6 +135,8 @@ export function selectNextPair(options: SelectPairOptions): SelectedPair | null 
     shownCounts = new Map(),
     maxShowsPerMovie = DEFAULT_MAX_SHOWS,
     sampleSize = DEFAULT_SAMPLE_SIZE,
+    avoidCenters = [],
+    avoidWeight = DEFAULT_AVOID_WEIGHT,
     random = Math.random,
   } = options;
 
@@ -121,7 +148,25 @@ export function selectNextPair(options: SelectPairOptions): SelectedPair | null 
   let best: SelectedPair | null = null;
 
   const evaluate = (a: PairCandidate, b: PairCandidate) => {
-    const score = expectedInformationGain(w, covariance, subtract(a.moodVector, b.moodVector));
+    const difference = subtract(a.moodVector, b.moodVector);
+    let score = expectedInformationGain(w, covariance, difference);
+
+    if (avoidCenters.length > 0 && avoidWeight > 0) {
+      const midpoint = a.moodVector.map((x, i) => (x + b.moodVector[i]) / 2);
+      // Gaussian kernel: closest rejected region dominates, and the penalty
+      // decays to nothing once the pair is a normal distance away.
+      let strongest = 0;
+      for (const center of avoidCenters) {
+        let squared = 0;
+        for (let i = 0; i < midpoint.length; i++) {
+          const d = midpoint[i] - center[i];
+          squared += d * d;
+        }
+        strongest = Math.max(strongest, Math.exp(-squared / (2 * AVOID_SCALE * AVOID_SCALE)));
+      }
+      score -= avoidWeight * strongest;
+    }
+
     if (!best || score > best.score) best = { a, b, score };
   };
 

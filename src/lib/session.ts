@@ -27,11 +27,24 @@ export const RECOMMENDATION_COUNT = 3;
 /** Below this many seen films, pair selection has nothing to work with. */
 export const MIN_SEEN_MOVIES = 8;
 
+/**
+ * How many times a session may answer "neither".
+ *
+ * Each one is genuinely informative, but it is also the cheapest button to
+ * press, and a user pressing it out of indecision injects a false "both below
+ * average" claim — worse than no answer at all. Capping it keeps the escape
+ * hatch available to people who mean it without letting it become the path of
+ * least resistance through the whole session.
+ */
+export const MAX_NEITHER_PER_SESSION = 3;
+
 export interface PairPrompt {
   round: number;
   totalRounds: number;
   a: Movie;
   b: Movie;
+  /** "Neither" answers still allowed; the UI hides the option at zero. */
+  neitherRemaining: number;
 }
 
 export interface SessionRecommendation {
@@ -90,23 +103,87 @@ interface AnsweredRow {
   loser_vector: string;
 }
 
-/** Every answered (non-skipped) comparison in the session, as mood differences. */
+interface NeitherRow {
+  a_vector: string;
+  b_vector: string;
+}
+
+/**
+ * Every answered comparison in the session, expressed as mood differences.
+ *
+ * A 'neither' answer contributes two rows rather than none. Mood vectors are
+ * z-scored, so the origin is the average film, and "neither of these appeals
+ * tonight" reads as "both score below average for me right now". That is the
+ * only signal in the whole design that says anything about *magnitude* —
+ * Bradley-Terry over pairs is scale-free and can otherwise recover a direction
+ * but never a distance.
+ *
+ * Simulated over 500 users at 10 rounds, encoding it this way lifts direction
+ * recovery from 0.686 to 0.751 and top-1 percentile from 0.965 to 0.979,
+ * whereas discarding the answer scores *below* forcing a choice (0.676).
+ * See the note in scripts/calibrate.ts.
+ */
 async function getAnsweredComparisons(sessionId: string): Promise<Comparison[]> {
-  const rows = await query<AnsweredRow>(
-    `SELECT wm.mood_vector AS winner_vector,
-            lm.mood_vector AS loser_vector
-       FROM comparisons c
-       JOIN movies wm ON wm.id = c.winner_id
-       JOIN movies lm ON lm.id = CASE WHEN c.winner_id = c.movie_a_id
-                                      THEN c.movie_b_id ELSE c.movie_a_id END
-      WHERE c.session_id = $1 AND c.winner_id IS NOT NULL
-      ORDER BY c.round`,
-    [sessionId],
-  );
-  return rows.map((row) => ({
+  const [chosen, neither] = await Promise.all([
+    query<AnsweredRow>(
+      `SELECT wm.mood_vector AS winner_vector,
+              lm.mood_vector AS loser_vector
+         FROM comparisons c
+         JOIN movies wm ON wm.id = c.winner_id
+         JOIN movies lm ON lm.id = CASE WHEN c.winner_id = c.movie_a_id
+                                        THEN c.movie_b_id ELSE c.movie_a_id END
+        WHERE c.session_id = $1 AND c.outcome = 'chose'
+        ORDER BY c.round`,
+      [sessionId],
+    ),
+    query<NeitherRow>(
+      `SELECT am.mood_vector AS a_vector, bm.mood_vector AS b_vector
+         FROM comparisons c
+         JOIN movies am ON am.id = c.movie_a_id
+         JOIN movies bm ON bm.id = c.movie_b_id
+        WHERE c.session_id = $1 AND c.outcome = 'neither'
+        ORDER BY c.round`,
+      [sessionId],
+    ),
+  ]);
+
+  const comparisons: Comparison[] = chosen.map((row) => ({
     winner: parseVector(row.winner_vector)!,
     loser: parseVector(row.loser_vector)!,
   }));
+
+  const averageFilm = new Array(MOOD_DIM).fill(0);
+  for (const row of neither) {
+    comparisons.push({ winner: averageFilm, loser: parseVector(row.a_vector)! });
+    comparisons.push({ winner: averageFilm, loser: parseVector(row.b_vector)! });
+  }
+
+  return comparisons;
+}
+
+/** Midpoints of the pairs this session rejected outright, in mood space. */
+async function getRejectedMidpoints(sessionId: string): Promise<number[][]> {
+  const rows = await query<NeitherRow>(
+    `SELECT am.mood_vector AS a_vector, bm.mood_vector AS b_vector
+       FROM comparisons c
+       JOIN movies am ON am.id = c.movie_a_id
+       JOIN movies bm ON bm.id = c.movie_b_id
+      WHERE c.session_id = $1 AND c.outcome = 'neither'`,
+    [sessionId],
+  );
+  return rows.map((row) => {
+    const a = parseVector(row.a_vector)!;
+    const b = parseVector(row.b_vector)!;
+    return a.map((x, i) => (x + b[i]) / 2);
+  });
+}
+
+async function countNeither(sessionId: string): Promise<number> {
+  const [row] = await query<{ count: string }>(
+    `SELECT count(*) AS count FROM comparisons WHERE session_id = $1 AND outcome = 'neither'`,
+    [sessionId],
+  );
+  return Number(row.count);
 }
 
 /** The user's long-term taste, if we have it; otherwise no prior preference. */
@@ -150,7 +227,7 @@ export async function getNextPair(
   }>(
     `SELECT round, movie_a_id, movie_b_id
        FROM comparisons
-      WHERE session_id = $1 AND winner_id IS NULL AND NOT skipped
+      WHERE session_id = $1 AND outcome = 'pending'
       ORDER BY round
       LIMIT 1`,
     [sessionId],
@@ -164,7 +241,13 @@ export async function getNextPair(
     const b = byId.get(pending[0].movie_b_id);
     // Both are still in the seen pool: hand the same question back.
     if (a && b) {
-      return { round: pending[0].round, totalRounds: TOTAL_ROUNDS, a, b };
+      return {
+        round: pending[0].round,
+        totalRounds: TOTAL_ROUNDS,
+        a,
+        b,
+        neitherRemaining: MAX_NEITHER_PER_SESSION - (await countNeither(sessionId)),
+      };
     }
     // One was marked unseen since; drop the question and draw a fresh one.
     await query(`DELETE FROM comparisons WHERE session_id = $1 AND round = $2`, [
@@ -173,8 +256,10 @@ export async function getNextPair(
     ]);
   }
 
+  // Both 'chose' and 'neither' consume a round; only 'pending' does not.
   const [{ count }] = await query<{ count: string }>(
-    `SELECT count(*) AS count FROM comparisons WHERE session_id = $1 AND winner_id IS NOT NULL`,
+    `SELECT count(*) AS count FROM comparisons
+      WHERE session_id = $1 AND outcome <> 'pending'`,
     [sessionId],
   );
   const answered = Number(count);
@@ -190,6 +275,10 @@ export async function getNextPair(
     w,
     covariance,
     shownCounts,
+    // After a rejection, refining around the same region wastes a round: the
+    // user has said this whole neighbourhood is wrong tonight. Steer away from
+    // it and ask somewhere genuinely different.
+    avoidCenters: await getRejectedMidpoints(sessionId),
   });
   if (!pair) return null;
 
@@ -210,6 +299,7 @@ export async function getNextPair(
     totalRounds: TOTAL_ROUNDS,
     a: byId.get(pair.a.movieId)!,
     b: byId.get(pair.b.movieId)!,
+    neitherRemaining: MAX_NEITHER_PER_SESSION - (await countNeither(sessionId)),
   };
 }
 
@@ -234,7 +324,7 @@ export async function recordChoice(
   await assertOwnership(sessionId, userId);
   const updated = await query(
     `UPDATE comparisons
-        SET winner_id = $3, answered_at = now()
+        SET winner_id = $3, outcome = 'chose', answered_at = now()
       WHERE session_id = $1 AND round = $2
         AND $3 IN (movie_a_id, movie_b_id)
       RETURNING id`,
@@ -254,6 +344,48 @@ export async function recordChoice(
 }
 
 /**
+ * The user has seen both films and wants neither tonight.
+ *
+ * Recorded as a real answer, not a skip: see getAnsweredComparisons for how it
+ * is encoded. Returns whether the allowance is now used up, so the UI can hide
+ * the button rather than offering something that will be refused.
+ */
+export async function recordNeither(
+  sessionId: string,
+  userId: string,
+  round: number,
+): Promise<{ remaining: number }> {
+  await assertOwnership(sessionId, userId);
+
+  const used = await countNeither(sessionId);
+  if (used >= MAX_NEITHER_PER_SESSION) {
+    throw new Error(
+      `You have already passed on ${MAX_NEITHER_PER_SESSION} pairs this session — pick one of these two.`,
+    );
+  }
+
+  const updated = await query(
+    `UPDATE comparisons
+        SET outcome = 'neither', winner_id = NULL, answered_at = now()
+      WHERE session_id = $1 AND round = $2 AND outcome = 'pending'
+      RETURNING id`,
+    [sessionId, round],
+  );
+  if (updated.length === 0) throw new Error("no such unanswered round");
+
+  // Being shown a pair still tells us the user has seen both films.
+  await query(
+    `INSERT INTO seen_movies (user_id, movie_id, source, seen)
+     SELECT $1, unnest(ARRAY[movie_a_id, movie_b_id]), 'comparison', true
+       FROM comparisons WHERE session_id = $2 AND round = $3
+     ON CONFLICT (user_id, movie_id) DO NOTHING`,
+    [userId, sessionId, round],
+  );
+
+  return { remaining: MAX_NEITHER_PER_SESSION - (used + 1) };
+}
+
+/**
  * The user has not seen one of the two films. Retire it from their pool and
  * discard the question so a fresh pair is drawn for the same round.
  */
@@ -266,7 +398,7 @@ export async function markNotSeen(
   await markSeen(userId, [movieId], "skip", false);
   await query(
     `DELETE FROM comparisons
-      WHERE session_id = $1 AND winner_id IS NULL AND $2 IN (movie_a_id, movie_b_id)`,
+      WHERE session_id = $1 AND outcome = 'pending' AND $2 IN (movie_a_id, movie_b_id)`,
     [sessionId, movieId],
   );
 }

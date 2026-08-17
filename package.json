@@ -12,6 +12,7 @@
     "db:up": "docker compose up -d --wait",
     "db:down": "docker compose down",
     "db:reset": "docker compose down -v && docker compose up -d --wait",
+    "db:migrate": "tsx scripts/migrate.ts",
     "db:psql": "docker compose exec db psql -U moviemap -d moviemap",
 
     "data:films": "tsx scripts/01-fetch-wikidata.ts",

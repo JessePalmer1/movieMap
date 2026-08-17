@@ -129,9 +129,13 @@ CREATE TABLE comparisons (
     round       integer NOT NULL,
     movie_a_id  integer NOT NULL REFERENCES movies(id),
     movie_b_id  integer NOT NULL REFERENCES movies(id),
-    -- Null when the user skipped ("seen neither" / "no preference").
+    -- Set only when outcome = 'chose'.
     winner_id   integer REFERENCES movies(id),
-    skipped     boolean NOT NULL DEFAULT false,
+    -- pending  shown, awaiting an answer
+    -- chose    the user picked one
+    -- neither  the user has seen both and wants neither tonight; encoded as
+    --          both films losing to a phantom average film at the origin
+    outcome     text NOT NULL DEFAULT 'pending',
     -- Expected information gain of this pair at the time it was chosen.
     eig         real,
     shown_at    timestamptz NOT NULL DEFAULT now(),
@@ -141,11 +145,16 @@ CREATE TABLE comparisons (
     CONSTRAINT comparisons_distinct_films CHECK (movie_a_id <> movie_b_id),
     CONSTRAINT comparisons_winner_is_shown
         CHECK (winner_id IS NULL OR winner_id IN (movie_a_id, movie_b_id)),
-    CONSTRAINT comparisons_skip_has_no_winner
-        CHECK (NOT skipped OR winner_id IS NULL)
+    CONSTRAINT comparisons_outcome_valid
+        CHECK (outcome IN ('pending', 'chose', 'neither')),
+    CONSTRAINT comparisons_chose_has_winner
+        CHECK (outcome <> 'chose' OR winner_id IS NOT NULL),
+    CONSTRAINT comparisons_unchosen_has_no_winner
+        CHECK (outcome = 'chose' OR winner_id IS NULL)
 );
 
 CREATE INDEX comparisons_session_idx ON comparisons (session_id, round);
+CREATE INDEX comparisons_outcome_idx ON comparisons (session_id, outcome);
 
 -- ---------------------------------------------------------------------------
 -- Output

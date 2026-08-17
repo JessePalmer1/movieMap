@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { requireUserId } from "@/lib/auth";
-import { markSeen } from "@/lib/movies";
+import { reconcileGridSelection } from "@/lib/movies";
 import { MIN_SEEN_MOVIES, createSession } from "@/lib/session";
 
 /**
@@ -9,10 +9,17 @@ import { MIN_SEEN_MOVIES, createSession } from "@/lib/session";
  */
 export async function POST(request: Request) {
   try {
-    const body = (await request.json()) as { seenMovieIds?: unknown };
-    const ids = Array.isArray(body.seenMovieIds)
-      ? body.seenMovieIds.filter((id): id is number => Number.isInteger(id))
-      : [];
+    const body = (await request.json()) as {
+      seenMovieIds?: unknown;
+      shownMovieIds?: unknown;
+    };
+    const asIds = (value: unknown) =>
+      Array.isArray(value) ? value.filter((id): id is number => Number.isInteger(id)) : [];
+
+    const ids = asIds(body.seenMovieIds);
+    // Which films the grid displayed, so unticking one can be distinguished
+    // from a film that simply was not on screen.
+    const shown = asIds(body.shownMovieIds);
 
     if (ids.length < MIN_SEEN_MOVIES) {
       return NextResponse.json(
@@ -24,7 +31,7 @@ export async function POST(request: Request) {
     }
 
     const userId = await requireUserId();
-    await markSeen(userId, ids, "grid");
+    await reconcileGridSelection(userId, shown, ids);
     const sessionId = await createSession(userId);
 
     return NextResponse.json({ sessionId });

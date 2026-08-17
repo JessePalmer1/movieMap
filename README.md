@@ -26,6 +26,22 @@ fitted by ridge-regularised logistic regression on winner-minus-loser vectors. S
 
 ---
 
+**"Neither appeals right now" carries magnitude.** Pairwise comparison is *scale-free* — it recovers the direction of a mood but never its size. A rejected pair is the one signal that fixes that: mood vectors are z-scored, so the origin is literally the average film, and "neither of these tonight" means *both score below average for me right now*. It is recorded as two comparisons lost against a phantom film at the origin — no new machinery, just two extra rows in the same fit.
+
+Simulated over 500 users at 10 rounds, with users who reject a pair when neither film clears their bar:
+
+```
+  reject-rate  design     neithers  cos    top-1    top-3
+  0.0          control    0.0       0.684  0.967    0.993
+  0.4          control    0.0       0.686  0.965    0.991
+  0.4          lost       1.2       0.676  0.960    0.989
+  0.4          baseline   1.1       0.751  0.979    0.995
+```
+
+`control` forces a choice, `lost` discards the answer, `baseline` is the encoding above. Note the middle row: **offering the button and then ignoring the answer is worse than not offering it at all.** The gain is entirely in the encoding.
+
+Two guards, because it is also the cheapest button to press and a bored user pressing it asserts something false: capped at `MAX_NEITHER_PER_SESSION = 3`, and rendered as a quiet text link rather than a third button of equal weight. A rejection also steers the next question — information gain alone would happily offer another pair from the same neighbourhood, so `avoidCenters` penalises pairs near a rejected midpoint.
+
 ## Does it actually work?
 
 Two scripts answer this, and they are the point of the project rather than an afterthought.
@@ -65,10 +81,15 @@ Drives a full session through the real HTTP API with a simulated user who answer
 
 | strategy | fitted mood | recommended |
 |---|---|---|
-| `light` | funny, low attention cost, comforting | Minions: The Rise of Gru · Minions · Mamma Mia! |
-| `heavy` | serious, slow and contemplative, heavy | Stalker · Solaris · The Passion of the Christ |
-| `cosy` | warm, hopeful, calm | Mary Poppins · Singin' in the Rain · The Three Caballeros |
-| `arty` | slow, vibe-driven, challenging | Solaris · Stalker · Mulholland Drive |
+| `light` | fast, funny, light | Kidnapping, Caucasian Style · Operation Y · La Grande Vadrouille |
+| `heavy` | high attention cost, challenging, serious | The Zone of Interest · Eraserhead · The Mirror |
+| `cosy` | warm, calm, nostalgic | Singin' in the Rain · The Sound of Music · Miracle on 34th Street |
+| `arty` | slow, challenging, grounded | The Mirror · Nostalghia · Death in Venice |
+| `tense` | fast, plot-driven, tense | 2012 · World War Z · Mission: Impossible – Fallout |
+
+Five moods, five sets with no overlap between them. At 503 films *Stalker* and *Solaris*
+answered both `heavy` and `arty`, because nothing else in the catalogue was that slow;
+at 2000 those two moods separate cleanly.
 
 ---
 
@@ -78,13 +99,14 @@ Drives a full session through the real HTTP API with a simulated user who answer
 cp .env.example .env.local     # DATABASE_URL is already correct for docker
 npm install
 npm run db:up                  # Postgres 17 + pgvector on port 5433
+npm run db:migrate             # apply anything in db/migrations
 npm run dev
 ```
 
 The catalogue is already scored and committed (`data/mood-scores/`), so after `db:up` you need the pipeline once to populate the database:
 
 ```bash
-npm run data:films -- --limit 500    # Wikidata: titles, years, directors, genres
+npm run data:films -- --limit 2000   # Wikidata: titles, years, directors, genres
 npm run data:plots                   # Wikipedia plot summaries
 npm run data:load-scores             # the committed mood scores
 npm run data:normalize               # z-score across the corpus
@@ -143,7 +165,9 @@ db/schema.sql       everything, with the reasoning in comments
 
 ## Not done yet
 
+- **Accounts.** Your seen list already persists — an anonymous `users` row keyed by an httpOnly cookie, with `seen_movies` in Postgres — so returning to the same browser skips onboarding. What no account means is that the list does not follow you to a second device and does not survive clearing cookies. Adding real auth later needs no migration of what exists: `users.id` is already the anchor, so an `email` or `oauth_subject` column would attach an identity to the row a visitor already has, rather than starting them over.
 - **Long-term taste vector.** The schema has `users.taste_vector` and the fit already accepts a prior; it is zero until there are returning users to learn from.
-- **Bigger catalogue.** 503 films is enough to prove the mechanism but thin at the extremes — *Stalker* and *Solaris* show up for several distinct moods because little else is that slow. `data:films` scales to ~15k by dropping `--limit`.
+- **Anglophone skew is missing.** Popularity is the Wikidata sitelink count, which measures *global* fame rather than English-language fame. It works, but it surfaces films that are canonical elsewhere and unknown to most English speakers: the `light` smoke test returns three Soviet and French comedies, all correctly scored as light and fast, none of which a typical US viewer would recognise. Since the whole design depends on comparing films the user has *seen*, that matters. Wikidata exposes original language (P364) and English Wikipedia pageviews are available separately — either could weight the onboarding grid without touching the mood model.
+- **Bigger catalogue.** 2000 films separates the moods cleanly. `data:films` scales to ~15k by raising `--limit` and lowering `--min-sitelinks`; the binding constraint is scoring, not fetching.
 - **Trakt import** for the seen list. Letterboxd's API is request-only.
 - **Feedback capture.** The `feedback` table exists and nothing writes to it.

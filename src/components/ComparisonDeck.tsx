@@ -14,6 +14,7 @@ export interface Pair {
   totalRounds: number;
   a: PairMovie;
   b: PairMovie;
+  neitherRemaining: number;
 }
 
 /**
@@ -52,7 +53,7 @@ export function ComparisonDeck({
     setBusy(false);
   }
 
-  async function post(body: Record<string, number>) {
+  async function post(body: Record<string, number | boolean>) {
     if (busy) return;
     setBusy(true);
     setError(null);
@@ -124,6 +125,23 @@ export function ComparisonDeck({
           </div>
         ))}
       </div>
+
+      {/* Deliberately a quiet text link rather than a third button. Passing on
+          a pair is real signal, but it is also the easiest thing to click, and
+          someone pressing it out of indecision tells us something false. It
+          should cost slightly more effort than choosing. */}
+      {pair.neitherRemaining > 0 && (
+        <div className="mt-8 text-center">
+          <button
+            type="button"
+            onClick={() => post({ round: pair.round, neither: true })}
+            disabled={busy}
+            className="text-sm text-muted underline underline-offset-4 transition hover:text-foreground disabled:opacity-40"
+          >
+            Neither appeals right now
+          </button>
+        </div>
+      )}
 
       <p className="mt-10 text-center text-xs text-muted">
         Not which is better — which one you actually want tonight.

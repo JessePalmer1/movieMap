@@ -81,6 +81,38 @@ export async function getSeenMovies(userId: string): Promise<ScoredMovie[]> {
   return rows.map(toScoredMovie);
 }
 
+/**
+ * Just the ids, for pre-selecting the onboarding grid. Lighter than
+ * getSeenMovies, which loads mood vectors the grid has no use for.
+ */
+export async function getSeenMovieIds(userId: string): Promise<number[]> {
+  const rows = await query<{ movie_id: number }>(
+    `SELECT movie_id FROM seen_movies WHERE user_id = $1 AND seen`,
+    [userId],
+  );
+  return rows.map((r) => r.movie_id);
+}
+
+/**
+ * Applies an onboarding grid submission.
+ *
+ * Scoped deliberately to `shownIds` — the films the grid actually displayed.
+ * A returning user's seen list can contain films discovered during earlier
+ * sessions that the grid never showed, and unticking a poster must not quietly
+ * erase those.
+ */
+export async function reconcileGridSelection(
+  userId: string,
+  shownIds: number[],
+  selectedIds: number[],
+): Promise<void> {
+  const selected = new Set(selectedIds);
+  const deselected = shownIds.filter((id) => !selected.has(id));
+
+  await markSeen(userId, selectedIds, "grid", true);
+  await markSeen(userId, deselected, "grid", false);
+}
+
 export async function markSeen(
   userId: string,
   movieIds: number[],

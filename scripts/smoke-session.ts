@@ -15,7 +15,7 @@
  */
 
 import "./_env";
-import { arg, numericArg } from "./_env";
+import { arg, flag, numericArg } from "./_env";
 import { getPool, query } from "../src/lib/db";
 import { MOOD_AXES } from "../src/lib/moodAxes";
 
@@ -90,6 +90,7 @@ interface Pair {
   totalRounds: number;
   a: { id: number; title: string; year: number | null };
   b: { id: number; title: string; year: number | null };
+  neitherRemaining: number;
   done?: boolean;
 }
 
@@ -100,6 +101,10 @@ async function main() {
     throw new Error(`unknown strategy ${name}. Try: ${Object.keys(STRATEGIES).join(", ")}`);
   }
   const seenCount = numericArg("seen", 60);
+  // --picky makes the simulated user pass on pairs that clear nothing, which
+  // exercises the "neither" path end to end.
+  const picky = flag("picky");
+  const neitherThreshold = numericArg("neither-threshold", 0);
 
   const raw = await loadRawScores();
   const jar: Jar = { cookies: new Map() };
@@ -124,9 +129,25 @@ async function main() {
     const scoreB = raw.get(pair.b.id);
     if (!scoreA || !scoreB) throw new Error("a shown film has no raw scores");
 
+    const utilityA = utility(scoreA, strategy.weights);
+    const utilityB = utility(scoreB, strategy.weights);
+
+    // A picky user passes on any pair where neither film clears their bar.
+    if (picky && pair.neitherRemaining > 0 && Math.max(utilityA, utilityB) < neitherThreshold) {
+      console.log(
+        `  ${String(pair.round + 1).padStart(2)}. neither: ` +
+          `${pair.a.title.slice(0, 28)} / ${pair.b.title.slice(0, 28)}`,
+      );
+      await call(jar, `/api/session/${sessionId}/choice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ round: pair.round, neither: true }),
+      });
+      continue;
+    }
+
     // Higher utility wins: the weights point toward what this user wants.
-    const winner =
-      utility(scoreA, strategy.weights) >= utility(scoreB, strategy.weights) ? pair.a : pair.b;
+    const winner = utilityA >= utilityB ? pair.a : pair.b;
     const loser = winner.id === pair.a.id ? pair.b : pair.a;
 
     console.log(

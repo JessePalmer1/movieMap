@@ -24,6 +24,7 @@ export default function OnboardingPage() {
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [loading, setLoading] = useState(true);
   const [starting, setStarting] = useState(false);
+  const [returning, setReturning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -32,9 +33,14 @@ export default function OnboardingPage() {
       .then((data) => {
         if (data.error) throw new Error(data.error);
         setMovies(data.movies ?? []);
+        // Films this browser has already told us about stay ticked, so a
+        // returning visitor can start straight away instead of re-entering
+        // everything. The list lives in Postgres against an anonymous cookie.
+        setSelected(new Set<number>(data.seenMovieIds ?? []));
+        setReturning(Boolean(data.returning));
         if ((data.scoredMovieCount ?? 0) === 0) {
           setError(
-            "No films have mood scores yet. Run the pipeline: npm run data:films, data:plots, data:moods, data:normalize.",
+            "No films have mood scores yet. Run the pipeline: npm run data:films, data:plots, data:load-scores, data:normalize.",
           );
         }
       })
@@ -58,7 +64,10 @@ export default function OnboardingPage() {
       const response = await fetch("/api/session", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ seenMovieIds: [...selected] }),
+        body: JSON.stringify({
+          seenMovieIds: [...selected],
+          shownMovieIds: movies.map((m) => m.id),
+        }),
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error ?? "could not start a session");
@@ -73,11 +82,23 @@ export default function OnboardingPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-6 py-12 pb-32">
-      <h1 className="text-3xl font-bold tracking-tight">Which of these have you seen?</h1>
+      <h1 className="text-3xl font-bold tracking-tight">
+        {returning ? "Welcome back" : "Which of these have you seen?"}
+      </h1>
       <p className="mt-3 max-w-2xl text-muted">
-        Tap everything you have watched — the more the better, and it does not matter
-        whether you liked them. We only compare films you already know, so that what you
-        pick reflects your mood rather than a guess about a film you have never seen.
+        {returning ? (
+          <>
+            We remembered the {selected.size} films you have seen — hit Start whenever you
+            are ready. Tap any others below to add them, or tap a ticked one to remove it.
+          </>
+        ) : (
+          <>
+            Tap everything you have watched — the more the better, and it does not matter
+            whether you liked them. We only compare films you already know, so that what
+            you pick reflects your mood rather than a guess about a film you have never
+            seen.
+          </>
+        )}
       </p>
 
       {loading && <p className="mt-12 text-muted">Loading films…</p>}
