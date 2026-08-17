@@ -1,0 +1,59 @@
+@import "tailwindcss";
+
+/*
+ * A dark, cinema-ish palette. Films are shown as posters against near-black,
+ * which is both the obvious choice for the subject and the one that keeps
+ * attention on the two images the user is deciding between.
+ */
+:root {
+  --background: #0b0b0f;
+  --surface: #16161d;
+  --surface-raised: #1e1e28;
+  --foreground: #f2f2f5;
+  --muted: #9a9aa8;
+  --border: #2a2a36;
+  --accent: #f5c518;
+  --accent-contrast: #14140c;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-surface-raised: var(--surface-raised);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-border: var(--border);
+  --color-accent: var(--accent);
+  --color-accent-contrast: var(--accent-contrast);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Posters swap in on every round; a short fade stops the flicker. */
+@keyframes fade-up {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+.animate-fade-up {
+  animation: fade-up 220ms ease-out both;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-fade-up {
+    animation: none;
+  }
+}

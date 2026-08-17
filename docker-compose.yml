@@ -1,0 +1,21 @@
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    container_name: moviemap-db
+    environment:
+      POSTGRES_USER: moviemap
+      POSTGRES_PASSWORD: moviemap
+      POSTGRES_DB: moviemap
+    ports:
+      - "5433:5432"
+    volumes:
+      - moviemap-pgdata:/var/lib/postgresql/data
+      - ./db/schema.sql:/docker-entrypoint-initdb.d/01-schema.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U moviemap -d moviemap"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+volumes:
+  moviemap-pgdata:
