@@ -42,6 +42,12 @@ Simulated over 500 users at 10 rounds, with users who reject a pair when neither
 
 Two guards, because it is also the cheapest button to press and a bored user pressing it asserts something false: capped at `MAX_NEITHER_PER_SESSION = 3`, and rendered as a quiet text link rather than a third button of equal weight. A rejection also steers the next question — information gain alone would happily offer another pair from the same neighbourhood, so `avoidCenters` penalises pairs near a rejected midpoint.
 
+**The final five are chosen for variety, not just score.** Taking the top N by score alone returns near-duplicates, because films scoring well on one mood direction cluster together — observed for real, with two Gaidai comedies in one result and two Tarkovsky films in another. Selection is therefore maximal marginal relevance: take the best film, then keep taking the best film *not already represented*, where "represented" means the same director, the same series, or a mood vector too close to something already picked.
+
+Series detection compares leading title *words*, not characters, because character prefixes merge unrelated films — "The Terminator" and "The Terminal" share ten leading characters but only the word "the". Words also catch the case that defeats everything simpler: *The SpongeBob Movie: Sponge Out of Water* and *The SpongeBob SquarePants Movie* have different directors and put their colons in different places.
+
+**Explanations are computed, not written.** Each pick reports which mood axes contributed most to its score — literally the largest terms of the dot product — so a recommendation arrives as "because you wanted something light and funny". This is the payoff of fitting over interpretable axes rather than a raw embedding, and it needs no model.
+
 ## Does it actually work?
 
 Two scripts answer this, and they are the point of the project rather than an afterthought.
@@ -110,6 +116,7 @@ npm run data:films -- --limit 2000   # Wikidata: titles, years, directors, genre
 npm run data:plots                   # Wikipedia plot summaries
 npm run data:load-scores             # the committed mood scores
 npm run data:normalize               # z-score across the corpus
+npm run data:ratings                 # Wikidata P1657: G / PG / PG-13 / R
 ```
 
 ### Optional
@@ -120,9 +127,9 @@ npm run data:embed      # needs VOYAGE_API_KEY; not used by the recommender
 npm run data:moods      # needs ANTHROPIC_API_KEY; regenerate scores from scratch
 ```
 
-### Rationale text
+### No model at runtime
 
-The three recommendations can carry a one-sentence explanation, written by an LLM that sees the chosen/rejected pairs and catches interaction effects a linear model cannot express ("comedies, but only melancholy ones"). This needs `ANTHROPIC_API_KEY`. **Without it the app degrades gracefully** to the top three by mood score with no rationale — which is what it currently does. Everything else is unaffected.
+Serving a session touches no LLM at all. Fitting, retrieval, diversity selection and the explanations are all deterministic — the same session always produces the same five films. `ANTHROPIC_API_KEY` is used by `data:moods` if you ever want to regenerate the mood scores from scratch, and by nothing else.
 
 ---
 
@@ -132,7 +139,7 @@ Licensing constrained the architecture, so it is worth stating plainly.
 
 | Source | Licence | Used for |
 |---|---|---|
-| [Wikidata](https://www.wikidata.org) | CC0 | Titles, years, directors, genres, runtimes, ID crosswalks, popularity (sitelink count) |
+| [Wikidata](https://www.wikidata.org) | CC0 | Titles, years, directors, genres, runtimes, ID crosswalks, popularity (sitelink count), US content rating (P1657) |
 | [Wikipedia](https://en.wikipedia.org) | CC BY-SA | Plot summaries — the text the mood scorer reads |
 | `data/mood-scores/` | ours | Derived from the CC-licensed text above |
 | TMDB | non-commercial + attribution | **Poster images only, at display time** |
@@ -152,8 +159,8 @@ src/lib/
   pairSelection.ts  BALD acquisition — which pair teaches us most
   linalg.ts         12x12 dense linear algebra, no dependencies
   movies.ts         catalogue queries, pgvector retrieval
-  session.ts        the loop: fit, select, retrieve, rerank, store
-  rerank.ts         LLM shortlist + rationale (optional)
+  session.ts        the loop: fit, select, retrieve, store
+  selection.ts      diversity selection + computed explanations
 scripts/
   01..06            the offline pipeline, each resumable
   load-mood-scores  loads data/mood-scores/*.tsv

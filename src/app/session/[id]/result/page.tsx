@@ -2,14 +2,14 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getUserId } from "@/lib/auth";
 import { completeSession, getSessionResult } from "@/lib/session";
-import { Poster } from "@/components/Poster";
+import { RecommendationCard } from "@/components/RecommendationCard";
 
 /**
  * The payoff.
  *
- * Fitting, retrieval and rerank all happen here on the server. The result is
- * stored on first visit and read back on later ones, so a refresh does not pay
- * for another rerank or quietly hand back a different set of films.
+ * Fitting, retrieval and diversity selection all happen here on the server,
+ * with no model in the loop. The result is stored on first visit and read back
+ * on later ones, so a refresh never hands back a different set of films.
  */
 export default async function ResultPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
@@ -46,24 +46,14 @@ export default async function ResultPage({ params }: { params: Promise<{ id: str
         something {result.moodWords.join(", ")}
       </h1>
 
-      <div className="mt-12 grid gap-8 sm:grid-cols-3">
-        {result.recommendations.map(({ movie, rationale, rank }) => (
-          <article key={movie.id} className="animate-fade-up flex flex-col">
-            <Poster movie={movie} size="w500" priority={rank === 1} />
-            <h2 className="mt-4 text-lg font-semibold leading-tight">{movie.title}</h2>
-            <p className="mt-1 text-sm text-muted">
-              {[
-                movie.year,
-                movie.director,
-                movie.runtimeMinutes ? `${movie.runtimeMinutes} min` : null,
-              ]
-                .filter(Boolean)
-                .join(" · ")}
-            </p>
-            {rationale && (
-              <p className="mt-3 text-sm leading-relaxed text-foreground/85">{rationale}</p>
-            )}
-          </article>
+      <div className="mt-12 grid gap-x-6 gap-y-10 sm:grid-cols-3 lg:grid-cols-5">
+        {result.recommendations.map(({ movie, reasons, rank }) => (
+          <RecommendationCard
+            key={movie.id}
+            movie={movie}
+            reasons={reasons}
+            priority={rank <= 2}
+          />
         ))}
       </div>
 

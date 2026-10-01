@@ -21,6 +21,7 @@
     "data:embed": "tsx scripts/04-embed.ts",
     "data:normalize": "tsx scripts/05-normalize.ts",
     "data:posters": "tsx scripts/06-fetch-posters.ts",
+    "data:ratings": "tsx scripts/07-fetch-ratings.ts",
     "data:load-scores": "tsx scripts/load-mood-scores.ts",
 
     "calibrate": "tsx scripts/calibrate.ts",

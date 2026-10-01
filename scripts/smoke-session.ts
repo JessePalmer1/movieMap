@@ -166,16 +166,35 @@ async function main() {
     moodWords: string[];
     recommendations: Array<{
       rank: number;
-      rationale: string | null;
-      movie: { title: string; year: number | null };
+      reasons: string[];
+      movie: {
+        title: string;
+        year: number | null;
+        director: string | null;
+        runtimeMinutes: number | null;
+        contentRating: string | null;
+        plotSummary?: string | null;
+      };
     }>;
   }>(jar, `/api/session/${sessionId}/result`);
 
   console.log(`\n  fitted mood: ${result.moodWords.join(", ") || "(no clear signal)"}`);
   console.log("  recommended:");
   for (const rec of result.recommendations) {
-    console.log(`    ${rec.rank}. ${rec.movie.title} (${rec.movie.year})`);
-    if (rec.rationale) console.log(`       ${rec.rationale}`);
+    const meta = [
+      rec.movie.contentRating,
+      rec.movie.runtimeMinutes ? `${rec.movie.runtimeMinutes}m` : null,
+      rec.movie.director,
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    console.log(
+      `    ${rec.rank}. ${(rec.movie.title + " (" + rec.movie.year + ")").padEnd(44)} ${meta}`,
+    );
+    if (rec.reasons.length) console.log(`       because you wanted: ${rec.reasons.join(", ")}`);
+    if (rec.movie.plotSummary) {
+      console.log(`       plot: ${rec.movie.plotSummary.slice(0, 70).replace(/\s+/g, " ")}...`);
+    }
   }
 
   await getPool().end();

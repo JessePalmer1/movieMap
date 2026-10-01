@@ -1,10 +1,10 @@
 import { formatVector, parseVector, query } from "./db";
 import { identity } from "./linalg";
 import { MOOD_DIM, describeMood } from "./moodAxes";
-import { Comparison, fitMoodVector, scoreMovie } from "./preference";
+import { Comparison, fitMoodVector } from "./preference";
 import { selectNextPair } from "./pairSelection";
-import { Movie, ScoredMovie, getCandidates, getSeenMovies, markSeen } from "./movies";
-import { rerank } from "./rerank";
+import { Movie, ScoredMovie, getCandidates, getSeenMovies, markSeen, toMovie } from "./movies";
+import { selectRecommendations } from "./selection";
 
 /**
  * How many comparisons a session asks for.
@@ -19,10 +19,10 @@ export const TOTAL_ROUNDS = 10;
 /** Ridge strength for the session fit. See the lambda sweep in calibrate.ts. */
 const LAMBDA = 1.0;
 
-/** Films retrieved by mood score before the LLM rerank narrows them to three. */
-const CANDIDATE_POOL = 100;
+/** Films retrieved by mood score before diversity selection thins them. */
+const CANDIDATE_POOL = 150;
 
-export const RECOMMENDATION_COUNT = 3;
+export const RECOMMENDATION_COUNT = 5;
 
 /** Below this many seen films, pair selection has nothing to work with. */
 export const MIN_SEEN_MOVIES = 8;
@@ -50,7 +50,8 @@ export interface PairPrompt {
 export interface SessionRecommendation {
   movie: Movie;
   rank: number;
-  rationale: string | null;
+  /** Mood axes this film matched on, strongest first. Computed, not written. */
+  reasons: string[];
 }
 
 export interface SessionResult {
@@ -429,29 +430,16 @@ export async function completeSession(
     );
   }
 
-  // Retrieval by mood score, then the LLM narrows and explains. The linear
-  // model is good at ordering the whole catalogue; the LLM is good at spotting
-  // the interaction effects a linear model cannot express.
-  const picks = await rerank({
-    candidates,
-    comparisons: await getComparisonNames(sessionId),
-    moodWords: describeMood(w),
-    count: RECOMMENDATION_COUNT,
-  });
+  // Retrieval by mood score, then diversity selection thins the shortlist so
+  // the five picks are not five versions of the same film.
+  const picks = selectRecommendations(candidates, w, { count: RECOMMENDATION_COUNT });
 
   await query(`DELETE FROM recommendations WHERE session_id = $1`, [sessionId]);
   for (const [index, pick] of picks.entries()) {
     await query(
-      `INSERT INTO recommendations (session_id, movie_id, rank, score, reranked, rationale)
-       VALUES ($1, $2, $3, $4, $5, $6)`,
-      [
-        sessionId,
-        pick.movie.id,
-        index + 1,
-        scoreMovie(w, pick.movie.moodVector),
-        pick.reranked,
-        pick.rationale,
-      ],
+      `INSERT INTO recommendations (session_id, movie_id, rank, score, rationale)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [sessionId, pick.movie.id, index + 1, pick.score, pick.reasons.join(", ")],
     );
   }
 
@@ -467,27 +455,9 @@ export async function completeSession(
     recommendations: picks.map((pick, index) => ({
       movie: pick.movie,
       rank: index + 1,
-      rationale: pick.rationale,
+      reasons: pick.reasons,
     })),
   };
-}
-
-/** The chosen/rejected pairs in plain language, for the rerank prompt. */
-async function getComparisonNames(
-  sessionId: string,
-): Promise<Array<{ chosen: string; rejected: string }>> {
-  const rows = await query<{ chosen: string; rejected: string }>(
-    `SELECT wm.title || COALESCE(' (' || wm.year || ')', '') AS chosen,
-            lm.title || COALESCE(' (' || lm.year || ')', '') AS rejected
-       FROM comparisons c
-       JOIN movies wm ON wm.id = c.winner_id
-       JOIN movies lm ON lm.id = CASE WHEN c.winner_id = c.movie_a_id
-                                      THEN c.movie_b_id ELSE c.movie_a_id END
-      WHERE c.session_id = $1 AND c.winner_id IS NOT NULL
-      ORDER BY c.round`,
-    [sessionId],
-  );
-  return rows;
 }
 
 export async function getSessionResult(
@@ -502,6 +472,8 @@ export async function getSessionResult(
   );
   if (!session || session.status !== "complete" || !session.mood_vector) return null;
 
+  // The plot summary is loaded only here, where the UI actually shows it —
+  // pulling ~4KB of text for all 150 shortlisted candidates would be waste.
   const rows = await query<{
     rank: number;
     rationale: string | null;
@@ -513,10 +485,12 @@ export async function getSessionResult(
     runtime_minutes: number | null;
     poster_path: string | null;
     popularity: number;
+    content_rating: string | null;
+    plot_summary: string | null;
   }>(
     `SELECT r.rank, r.rationale,
-            m.id, m.title, m.year, m.director, m.genres,
-            m.runtime_minutes, m.poster_path, m.popularity
+            m.id, m.title, m.year, m.director, m.genres, m.runtime_minutes,
+            m.poster_path, m.popularity, m.content_rating, m.plot_summary
        FROM recommendations r
        JOIN movies m ON m.id = r.movie_id
       WHERE r.session_id = $1
@@ -528,17 +502,8 @@ export async function getSessionResult(
     moodWords: describeMood(parseVector(session.mood_vector)!),
     recommendations: rows.map((row) => ({
       rank: row.rank,
-      rationale: row.rationale,
-      movie: {
-        id: row.id,
-        title: row.title,
-        year: row.year,
-        director: row.director,
-        genres: row.genres ?? [],
-        runtimeMinutes: row.runtime_minutes,
-        posterPath: row.poster_path,
-        popularity: row.popularity,
-      },
+      reasons: row.rationale ? row.rationale.split(", ").filter(Boolean) : [],
+      movie: toMovie(row),
     })),
   };
 }

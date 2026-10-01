@@ -34,6 +34,11 @@ CREATE TABLE movies (
     poster_path       text,
     poster_fetched_at timestamptz,
 
+    -- US content rating (G / PG / PG-13 / R / NC-17) from Wikidata P1657.
+    -- Nullable: roughly 75% coverage, thinner for older and non-US titles.
+    content_rating            text,
+    content_rating_fetched_at timestamptz,
+
     -- English Wikipedia article title; step 2 fetches the plot summary by it.
     article_title   text,
     plot_summary    text,                          -- Wikipedia, CC BY-SA

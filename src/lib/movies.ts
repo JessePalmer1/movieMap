@@ -9,6 +9,10 @@ export interface Movie {
   runtimeMinutes: number | null;
   posterPath: string | null;
   popularity: number;
+  /** US certificate (G/PG/PG-13/R/NC-17), or null where Wikidata has none. */
+  contentRating: string | null;
+  /** Wikipedia plot summary. Only loaded where the UI actually shows it. */
+  plotSummary?: string | null;
 }
 
 export interface ScoredMovie extends Movie {
@@ -24,10 +28,12 @@ interface MovieRow {
   runtime_minutes: number | null;
   poster_path: string | null;
   popularity: number;
+  content_rating: string | null;
+  plot_summary?: string | null;
   mood_vector?: string | null;
 }
 
-function toMovie(row: MovieRow): Movie {
+export function toMovie(row: MovieRow): Movie {
   return {
     id: row.id,
     title: row.title,
@@ -37,6 +43,8 @@ function toMovie(row: MovieRow): Movie {
     runtimeMinutes: row.runtime_minutes,
     posterPath: row.poster_path,
     popularity: row.popularity,
+    contentRating: row.content_rating,
+    ...(row.plot_summary !== undefined ? { plotSummary: row.plot_summary } : {}),
   };
 }
 
@@ -46,7 +54,8 @@ function toScoredMovie(row: MovieRow): ScoredMovie {
   return { ...toMovie(row), moodVector };
 }
 
-const MOVIE_COLUMNS = `id, title, year, director, genres, runtime_minutes, poster_path, popularity`;
+const MOVIE_COLUMNS = `id, title, year, director, genres, runtime_minutes,
+                       poster_path, popularity, content_rating`;
 
 /**
  * The onboarding grid: the best-known films we have mood scores for.

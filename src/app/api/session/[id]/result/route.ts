@@ -9,8 +9,8 @@ export async function GET(_request: Request, context: { params: Promise<{ id: st
   if (!userId) return NextResponse.json({ error: "no session" }, { status: 401 });
 
   try {
-    // Idempotent: a refresh returns the stored result rather than paying for
-    // another rerank and handing back a different set of films.
+    // Idempotent: a refresh returns the stored result rather than recomputing
+    // it, so the five films never change under the user.
     const existing = await getSessionResult(id, userId);
     if (existing) return NextResponse.json(existing);
 
