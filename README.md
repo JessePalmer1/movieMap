@@ -2,7 +2,7 @@
 
 Find something to watch based on the mood you are in right now, not the taste you have in general.
 
-You tap through ten forced choices between films you have **already seen** — not which is better, which you would rather watch tonight — and it recommends three you have not seen that match the mood behind those picks.
+You tap through ten forced choices between films you have **already seen**. You select what sounds better tonight, and it recommends three you have not seen that match the mood behind those picks.
 
 ---
 
